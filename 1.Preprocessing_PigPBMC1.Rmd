@@ -1,0 +1,192 @@
+---
+title: "1.Preprocessing_PBMCs_PIGS"
+author: "Melissa Garcia"
+date: "2024-03-13"
+output: html_document
+---
+```{r}
+library(dplyr)
+library(Seurat)
+library(ggplot2)
+library(DoubletFinder)
+library(SeuratDisk)
+library(SeuratData)
+library(biomaRt)
+library(tidyr)
+library(DoubletFinder)
+library(base)
+```
+
+
+#Set up
+```{r}
+#Data
+out_path<-("../pigpbmc_Wang/")
+fileprefix <- "pigpbmc"
+nProp <-(0.075) ##For doublet finder
+
+x<-readRDS("../Input/pigpbmc_Wang/pigpbmc.rds")
+
+#All mitochondria genes from Sus scrofa
+MtGenes <- c("ND1", "ND2", "ND3", "ND4", "ND5", "ND6", "COX1", "COX2", "COX3", "CYTB", "ATP6", "ATP8", "ND4L", "ENSSSCG00000018060","ENSSSCG00000018061", "ENSSSCG00000018062", "ENSSSCG00000018063", "ENSSSCG00000018064", "ENSSSCG00000018066", "ENSSSCG00000018067", "ENSSSCG00000018068", "ENSSSCG00000018070", "ENSSSCG00000018071", "ENSSSCG00000018072", "ENSSSCG00000018073", "ENSSSCG00000018074", "ENSSSCG00000018076", "ENSSSCG00000018077", "ENSSSCG00000018079", "ENSSSCG00000018083", "ENSSSCG00000018085", "ENSSSCG00000018088", "ENSSSCG00000018089", "ENSSSCG00000018090", "ENSSSCG00000018093", "ENSSSCG00000018095", "ENSSSCG00000018096")
+MtGenes_filtered <- intersect(MtGenes, rownames(x))
+
+#Reference
+Reference <-LoadH5Seurat("../Input/Reference_PBMC7_AllCells.h5seurat")
+
+set.seed(123)
+```
+
+# Visualize QC metrics 
+```{r}
+x[["percent.mt"]] <- PercentageFeatureSet(x,features = MtGenes_filtered)
+VlnPlot(x, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+mean(x$nFeature_RNA)
+min(x$nFeature_RNA)
+max(x$nFeature_RNA)
+mean(x$nCount_RNA)
+mean(x$percent.mt)
+max(x$percent.mt)
+```
+
+#Filter & double check QC
+```{r}
+x <- subset(x, subset = percent.mt < 20)
+VlnPlot(x, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+```
+
+#Normalize data
+```{r}
+x <- NormalizeData(x)
+x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 4000)
+x <- ScaleData(x)
+x <- RunPCA(x)
+ElbowPlot(x)
+
+
+x <- RunUMAP(x, dims = 1:15)
+DimPlot(x, reduction = "umap")
+
+Reference <- NormalizeData(Reference)
+Reference <- FindVariableFeatures(Reference, selection.method = "vst", nfeatures = 4000)
+Reference <- ScaleData(Reference)
+```
+
+#Doublet Finder (Remove doublets)
+```{r}
+#pK estimation
+sweep.list <- paramSweep(x, PCs = 1:15, sct=FALSE)
+sweep.stats <- summarizeSweep(sweep.list, GT = FALSE)
+bcmvn<-find.pK(sweep.stats)
+barplot(bcmvn$BCmetric, names.arg = bcmvn$pK, las=2)
+
+sweep.stats [sweep.stats$BCreal==max(sweep.stats$BCreal), "pK"]-> pK
+pK<- as.character(pK)
+pK<- as.numeric(pK)
+
+# run doubletFinder
+nExp <- round(ncol(x) * 0.075)  
+x <- doubletFinder(x, pN = 0.25, pK = pK, nExp = nExp, PCs = 1:15)
+
+DF.name = colnames(x@meta.data)[grepl("DF.classification", colnames(x@meta.data))]
+
+DimPlot(x, reduction = "umap", group.by = DF.name)+ ggtitle("Doublets PBMC7")
+
+VlnPlot(x, features = "nFeature_RNA", group.by = DF.name, pt.size = 0.1)
+x = x[, x@meta.data[, DF.name] == "Singlet"]
+```
+
+#QC check again
+```{r}
+VlnPlot(x, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+FeatureScatter(x, feature1 = "nCount_RNA", feature2 = "nFeature_RNA") 
+```
+
+#Cell annotation with reference data from Herrera-Uribe et al. 
+```{r}
+# transfer cell type labels from reference to query
+transfer_anchors <- FindTransferAnchors(
+  reference = Reference,
+  query = x,
+  recompute.residuals = FALSE,
+  dims = 1:30
+)
+
+predictions <- TransferData(
+  anchorset = transfer_anchors, 
+  refdata = Reference$celltypes,
+  weight.reduction = x[['pca']],
+  dims = 1:30
+)
+
+x <- AddMetaData(
+  object = x,
+  metadata = predictions
+)
+
+Idents(x) <- "predicted.id"
+
+x <- RunUMAP(x, dims = 1:15)
+DimPlot(x, reduction = "umap")
+
+```
+#PBMC Gral Markers
+```{r}
+T_Cells<- c("CD3E", "CD8A", "CD8B", "CD4")
+GD_TCells <- ("TRDC")
+NK_Cells <- c("CD2", "KLRK1", "HCST")
+B_cells <-c("MS4A1", "CD19", "CD79A")
+Monocyte <- c("CD14", "NLRP3", "TLR4")
+DC<- c("FLT3", "FCER1A","CLEC12A","SLA-DRB1","CD93")
+Erythrocytes <- c("HBM", "AHSP")
+
+All_PBMC <-c(T_Cells, NK_Cells, GD_TCells, B_cells, Monocyte, DC,Erythrocytes)
+```
+
+#Gral annotation
+```{r}
+meta<-x@meta.data
+meta[meta$predicted.id=="CD8ab+ ab T cells", "Gral_annotation"]<- "CD8 T cells"
+meta[meta$predicted.id=="CD8a+ ab T/NK cells", "Gral_annotation"]<- "CD8 T cells"
+meta[meta$predicted.id=="CD4+ ab T cells", "Gral_annotation"]<- "CD4 T cells"
+meta[meta$predicted.id=="CD2+ GD T cells", "Gral_annotation"]<- "GD T cells"
+meta[meta$predicted.id=="CD2- GD T cells", "Gral_annotation"]<- "GD T cells"
+meta[meta$predicted.id=="NK cells", "Gral_annotation"]<- "NK cells"
+meta[meta$predicted.id=="Monocytes", "Gral_annotation"]<- "Monocytes"	
+meta[meta$predicted.id=="pDCs", "Gral_annotation"]<- "pDCs"	
+meta[meta$predicted.id=="cDCs", "Gral_annotation"]<- "cDCs"	
+meta[meta$predicted.id=="B cells", "Gral_annotation"]<- "B cells"	
+meta[meta$predicted.id=="ASC", "Gral_annotation"]<- "B cells"
+meta[meta$predicted.id=="Erythrocytes", "Gral_annotation"]<- "Erythrocytes"
+meta[meta$predicted.id=="Unknown", "Gral_annotation"]<- "Unknown"
+x@meta.data<-meta
+
+Idents(x) <- "Gral_annotation"
+meta<-x@meta.data
+meta$Gral_annotation<-factor(meta$Gral_annotation, levels=c("CD8 T cells", "CD4 T cells", "GD T cells", "NK cells", "Monocytes", "pDCs", "cDCs", "B cells", "Erythrocytes", "Unknown"))
+x@meta.data<-meta
+levels(meta$Gral_annotation)
+Idents(x) <- "Gral_annotation"
+
+DimPlot(x, reduction = "umap")
+```
+
+#Find All markers 
+```{r fig.width=6, fig.height=2.5}
+x.markers <- FindAllMarkers(x, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+
+x.markers %>%
+    group_by(cluster) %>%
+    top_n(n = 5, wt = avg_log2FC) -> top5
+
+
+DotPlot(object = x, features = unique(top5$gene)) + scale_colour_gradient2(low="mediumpurple1", mid="white", high="firebrick1")+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+DotPlot(object = x, features = All_PBMC) + scale_colour_gradient2(low="mediumpurple1", mid="white", high="firebrick1")+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+
+```{r}
+saveRDS(x, paste0(out_path, fileprefix, "-Preprocessing.rds"))
+sessionInfo()
+```
