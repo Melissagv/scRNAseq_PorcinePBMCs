@@ -1,0 +1,142 @@
+---
+title: "2.Integration_PigPBMC"
+author: "Melissa Garcia"
+date: "2024-03-20"
+output: html_document
+---
+
+```{r}
+library(dplyr)
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+library(ggeasy)
+library(harmony)
+library(scCustomize)
+library(ggeasy)
+
+set.seed(123)
+```
+
+# Read datasets 
+```{r}
+x1 <- readRDS("../Input/pigpbmc1_Li/pigpbmc1-Preprocessing.rds")
+x2 <- readRDS("../Input/pigpbmc2_Li/pigpbmc2-Preprocessing.rds")
+x3 <- readRDS("../Input/pigpbmc_Wang/pigpbmc-Preprocessing.rds")
+x4 <- readRDS("../Input/PBMC7_AllCells/PBMC7-Preprocessing.rds")
+```
+
+# Find variable features for each dataset (nfeatures = 7500)
+```{r}
+x1 <- FindVariableFeatures(x1, selection.method = "vst", nfeatures = 7500)
+x2 <- FindVariableFeatures(x2, selection.method = "vst", nfeatures = 7500)
+x3 <- FindVariableFeatures(x3, selection.method = "vst", nfeatures = 7500)
+x4 <- FindVariableFeatures(x4, selection.method = "vst", nfeatures = 7500)
+```
+
+# Common variable features
+```{r}
+vf_x1 <- VariableFeatures(x1)
+vf_x2 <- VariableFeatures(x2)
+vf_x3 <- VariableFeatures(x3)
+vf_x4 <- VariableFeatures(x4)
+
+total_vf<- list (vf_x1, vf_x2, vf_x3, vf_x4)
+common_vf <- Reduce(f = intersect, x = total_vf)
+```
+
+# Merge datasets
+```{r}
+x <- merge(x1, y = c(x2, x3, x4))
+x
+
+x <- NormalizeData(x)
+x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000)
+x <- ScaleData(x)
+x <- RunPCA(x)
+ElbowPlot(x)
+
+
+x <- RunUMAP(x, dims = 1:15)
+DimPlot(x, reduction = "umap", group.by = "Gral_annotation")
+DimPlot(x, reduction = "umap", group.by = "DB")
+DimPlot(x, reduction = "umap", group.by = "SampleID")
+
+table(x$SampleID)
+```
+
+# Data sets integration using Harmony 
+```{r}
+x<-RunHarmony(x, "DB", reference_values = common_vf)
+ElbowPlot(x)
+
+
+
+table(x$SampleID, x$Gral_annotation)
+table(x$Gral_annotation)
+table(x$SampleID)
+table(x$DB)
+```
+# PBMCs Gral Markers
+```{r}
+T_Cells<- c("CD3E", "CD8A", "CD8B", "CD4")
+GD_TCells <- ("TRDC")
+NK_Cells <- c("CD2", "KLRK1", "HCST")
+B_cells <-c("MS4A1", "CD19", "CD79A")
+Monocyte <- c("CD14", "NLRP3", "TLR4")
+DC<- c("FLT3", "FCER1A","CLEC12A","SLA-DRB1","CD93")
+Erythrocytes <- c("HBM", "AHSP")
+
+All_PBMC <-c(T_Cells, NK_Cells, GD_TCells, B_cells, Monocyte, DC,Erythrocytes)
+```
+
+# Find top markers by group of cells
+```{r fig.width=6, fig.height=2.5}
+x<-JoinLayers(x)
+
+Idents(x) <- "Gral_annotation"
+meta<-x@meta.data
+meta$Gral_annotation<-factor(meta$Gral_annotation, levels=c("CD8 T cells", "CD4 T cells", "GD T cells", "NK cells", "Monocytes", "pDCs", "cDCs", "B cells", "Erythrocytes", "Unknown"))
+x@meta.data<-meta
+levels(meta$Gral_annotation)
+Idents(x) <- "Gral_annotation"
+
+
+Idents(x)<-"Gral_annotation"
+x.markers <- FindAllMarkers(x, assay = "RNA", only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+
+x.markers %>%
+    group_by(cluster) %>%
+    top_n(n = 5, wt = avg_log2FC) -> top5
+
+
+DotPlot(object = x, features = unique(top5$gene)) + scale_colour_gradient2(low="mediumpurple1", mid="white", high="firebrick1")+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+DotPlot(object = x, features = All_PBMC) + scale_colour_gradient2(low="mediumpurple1", mid="white", high="firebrick1")+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+# Delete erythrocytes and Unknown cells (if they are not of interest and have a low number of cells)
+```{r}
+x<-subset(x, idents = c("Erythrocytes", "Unknown"), invert = T )
+saveRDS(x, "../Input/PigsIntegrated.rds")
+x<-readRDS("../Input/PigsIntegrated.rds")
+```
+
+# Split object for further analysis 
+```{r}
+x <- SplitObject(x, split.by = "Gral_annotation")
+
+#Normalize data by group of cells after split them
+function1<-function(cellname){
+cellname <- NormalizeData(cellname)
+cellname <- ScaleData(cellname)
+cellname <- RunPCA(cellname)
+}
+
+x <-lapply(x, function1)
+```
+
+```{r}
+sessionInfo()
+```
+

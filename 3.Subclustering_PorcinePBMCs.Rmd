@@ -1,0 +1,115 @@
+---
+title: "Cell_Subclustering"
+author: "Melissa Garcia"
+date: "2024-04-25"
+output: html_document
+---
+
+```{r}
+library(dplyr)
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+library(ggeasy)
+library(harmony)
+library(scCustomize)
+```
+
+# Load data
+```{r}
+set.seed(123)
+x<-readRDS("../Input/PigsIntegrated.rds")
+
+#Preproocessing function
+function1<-function(cellname){
+cellname <- NormalizeData(cellname)
+cellname <- ScaleData(cellname)
+cellname <- RunPCA(cellname)
+}
+
+#Split object by Gral_annotation
+x <- SplitObject(x, split.by = "Gral_annotation")
+
+x <-lapply(x, function1)
+```
+
+# Find Neighbors and Clusters
+```{r fig.width=4}
+## B cells
+cell <- "B cells"
+
+ElbowPlot(x[[cell]], ndims = 40)
+
+x
+x[[cell]] <-RunUMAP(x[[cell]],reduction = "harmony", dims = 1:20)
+x[[cell]] <-FindNeighbors(x[[cell]],reduction = "harmony",dims = 1:20)
+x[[cell]] <-FindClusters(x[[cell]],resolution = 0.6)
+
+DimPlot(x[[cell]], reduction = "umap", label= T)+ ggtitle("Subclusters B cells")
+```
+
+# Clean data and find new clusters
+```{r}
+Idents(x[[cell]])<-"seurat_clusters"
+x[[cell]]<-subset(x[[cell]], idents = c("10", "11"), invert = T)
+
+x[[cell]] <-RunUMAP(x[[cell]],reduction = "harmony", dims = 1:20)
+x[[cell]] <-FindNeighbors(x[[cell]],reduction = "harmony",dims = 1:20)
+x[[cell]] <-FindClusters(x[[cell]],resolution = 0.6)
+
+DimPlot(x[[cell]], reduction = "umap", label= T)+ ggtitle("Subclusters B cells")+easy_remove_axes()
+#ggsave("../B cells/GeneralUMAP.png", width = 14, height = 10, units = "cm")
+```
+
+
+# Top Markers
+```{r fig.width=5.5, fig.height=3}
+Sub.markers <- FindAllMarkers(x[[cell]], only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25, assay = "RNA")
+Sub.markers %>%
+    group_by(cluster) %>%
+    top_n(n = 30, wt = avg_log2FC) -> top30
+
+#Save top 30 genes by cluster
+#write.csv(top30, "../Bcells_clusters.csv", row.names = F)
+
+
+#Dot plot from top 5 genes 
+Sub.markers %>%
+    group_by(cluster) %>%
+    top_n(n = 5, wt = avg_log2FC) -> top5
+top5 <-unique(top5$gene)
+
+DotPlot(object = x[[cell]], features = top5, assay = "RNA", dot.scale = 3) + scale_colour_gradient2(low="mediumpurple1", mid="white", high="firebrick1")+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+ ggtitle("Top 5 markers")+ theme(axis.title.x = element_blank(),axis.title.y = element_blank())
+```
+
+
+```{r fig.width=3.5, fig.height=5}
+#Heatmap from top 5 markers
+Avg<-AverageExpression(x[[cell]], assays = "RNA", features= top5,  return.seurat = TRUE)
+Avg<-ScaleData(Avg)
+
+DoHeatmap(Avg, label = F, features = top5e, assay = "RNA",draw.lines = FALSE)
+```
+
+# Check different markers in FeaturePlot and DotPlot
+```{r}
+FeaturePlot(x[[cell]], features = "CD38")
+FeaturePlot(x[[cell]], features = "IRF4")
+FeaturePlot(x[[cell]], features = "CD19")
+FeaturePlot(x[[cell]], features = "TNFRSF17")
+
+DotPlot(x[[cell]], c("PRDM1","IRF4", "TNFRSF17","CD19"))
+DotPlot(x[[cell]], c("CD2", "CR2", "IL2RA", "PTPRC"))
+DotPlot(x[[cell]],  c("CCR7", "CD24"))
+
+DotPlot(x[[cell]], "PTPRC")
+
+avrg<-AverageExpression(object = x[[cell]], assays = "RNA", features  = top5$gene)
+```
+
+# Save rds file
+```{r}
+saveRDS(x[[cell]], "../B cells/Bcells_object.rds")
+sessionInfo()
+```
+
