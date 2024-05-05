@@ -18,7 +18,7 @@ library(base)
 ```
 
 
-#Set up
+# Set up
 ```{r}
 #Data
 out_path<-("../pigpbmc_Wang/")
@@ -49,13 +49,13 @@ mean(x$percent.mt)
 max(x$percent.mt)
 ```
 
-#Filter & double check QC
+# Filter & double check QC
 ```{r}
 x <- subset(x, subset = percent.mt < 20)
 VlnPlot(x, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
 ```
 
-#Normalize data
+# Normalize data
 ```{r}
 x <- NormalizeData(x)
 x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 4000)
@@ -72,7 +72,7 @@ Reference <- FindVariableFeatures(Reference, selection.method = "vst", nfeatures
 Reference <- ScaleData(Reference)
 ```
 
-#Doublet Finder (Remove doublets)
+# Doublet Finder (Remove doublets)
 ```{r}
 #pK estimation
 sweep.list <- paramSweep(x, PCs = 1:15, sct=FALSE)
@@ -96,13 +96,13 @@ VlnPlot(x, features = "nFeature_RNA", group.by = DF.name, pt.size = 0.1)
 x = x[, x@meta.data[, DF.name] == "Singlet"]
 ```
 
-#QC check again
+# QC check again
 ```{r}
 VlnPlot(x, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
 FeatureScatter(x, feature1 = "nCount_RNA", feature2 = "nFeature_RNA") 
 ```
 
-#Cell annotation with reference data from Herrera-Uribe et al. 
+# Cell annotation with reference data from Herrera-Uribe et al. 
 ```{r}
 # transfer cell type labels from reference to query
 transfer_anchors <- FindTransferAnchors(
@@ -130,7 +130,7 @@ x <- RunUMAP(x, dims = 1:15)
 DimPlot(x, reduction = "umap")
 
 ```
-#PBMC Gral Markers
+# PBMC Gral Markers
 ```{r}
 T_Cells<- c("CD3E", "CD8A", "CD8B", "CD4")
 GD_TCells <- ("TRDC")
@@ -143,7 +143,7 @@ Erythrocytes <- c("HBM", "AHSP")
 All_PBMC <-c(T_Cells, NK_Cells, GD_TCells, B_cells, Monocyte, DC,Erythrocytes)
 ```
 
-#Gral annotation
+# Gral annotation
 ```{r}
 meta<-x@meta.data
 meta[meta$predicted.id=="CD8ab+ ab T cells", "Gral_annotation"]<- "CD8 T cells"
@@ -171,7 +171,7 @@ Idents(x) <- "Gral_annotation"
 DimPlot(x, reduction = "umap")
 ```
 
-#Find All markers 
+# Find All markers 
 ```{r fig.width=6, fig.height=2.5}
 x.markers <- FindAllMarkers(x, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
 
